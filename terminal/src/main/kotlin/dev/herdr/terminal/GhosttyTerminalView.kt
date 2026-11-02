@@ -30,7 +30,9 @@ import android.view.ViewConfiguration
 import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputConnectionWrapper
 import android.view.inputmethod.InputMethodManager
+import android.view.inputmethod.TextAttribute
 import android.widget.Magnifier
 import android.widget.OverScroller
 import java.nio.ByteBuffer
@@ -388,9 +390,11 @@ internal class GhosttyTerminalView(context: Context) : View(context) {
   /** Mark the underlying PTY as exited: stop forwarding input. */
   fun finish() {
     finished = true
+    imeLine.clear()
   }
 
   fun destroy() {
+    imeLine.clear()
     if (pacer.pending) Choreographer.getInstance().removeFrameCallback(frameCallback)
     pacer.detach()
     blinkScheduled = false
@@ -403,6 +407,22 @@ internal class GhosttyTerminalView(context: Context) : View(context) {
       GhosttyVt.free(handle)
       handle = 0
     }
+  }
+
+  /** The IME's line, and what the pane's will be once its echo lands. */
+  private val imeLine = ImeLine(::sendPlain)
+
+  /** IME bytes: no sticky-modifier chords — the field's line is what it is. */
+  private fun sendPlain(text: String): Boolean {
+    if (handle == 0L || finished) return false
+    // A latched modifier still turns a single character into a key chord, which
+    // is not text: take that path (it invalidates the line) rather than typing.
+    if (text.length == 1 && (accessoryBar?.stickyMetaState() ?: 0) != 0) {
+      sendText(text)
+      return true
+    }
+    sendBytes(text.toByteArray(Charsets.UTF_8))
+    return true
   }
 
   private fun sendBytes(bytes: ByteArray) {
@@ -470,11 +490,12 @@ internal class GhosttyTerminalView(context: Context) : View(context) {
   }
 
   /**
-   * Typed text: IME commits and accessory-bar symbols. A lit sticky modifier
-   * turns a single char into a key chord (Ctrl+C etc.) through ghostty's encoder.
+   * Typed text from the accessory bar. A lit sticky modifier turns a single
+   * char into a key chord (Ctrl+C etc.) through ghostty's encoder.
    */
   fun sendText(text: CharSequence) {
     if (text.isEmpty()) return
+    imeLine.invalidate()
     val meta = accessoryBar?.stickyMetaState() ?: 0
     if (meta != 0 && text.length == 1) {
       val keyCode = charToKeyCode(text[0])
@@ -491,6 +512,7 @@ internal class GhosttyTerminalView(context: Context) : View(context) {
   /** Send an accessory-bar key press with the current sticky modifiers. */
   fun sendAccessoryKey(keyCode: Int) {
     if (handle == 0L || finished) return
+    imeLine.invalidate()
     val meta = accessoryBar?.takeStickyMetaState() ?: 0
     GhosttyVt.encodeKey(handle, keyCode, 1, meta, 0, 0, null)?.let(::sendBytes)
   }
@@ -706,6 +728,8 @@ internal class GhosttyTerminalView(context: Context) : View(context) {
   private fun sendPaste(bytes: ByteArray) {
     val encoded = GhosttyVt.encodePaste(handle, bytes) ?: return
     if (selectionMode) clearSelection() else actionMode?.finish()
+    // A paste can bracket itself and hold newlines: the line is the program's now.
+    imeLine.invalidate()
     sendBytes(encoded)
   }
 
@@ -1247,14 +1271,17 @@ internal class GhosttyTerminalView(context: Context) : View(context) {
   override fun onCheckIsTextEditor(): Boolean = true
 
   override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
-    // Visible-password + no-suggestions keeps IMEs in send-as-you-type mode
-    // (no autocorrect batching) while still allowing CJK composition.
-    outAttrs.inputType = InputType.TYPE_CLASS_TEXT or
-      InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD or
-      InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-    outAttrs.imeOptions = EditorInfo.IME_ACTION_NONE or
+    // A plain text field, so the IME offers suggestions, autocorrect and swipe.
+    // It owns a line and edits it with setComposingText / commitText /
+    // deleteSurroundingText; [imeLine] sends the difference against the pane's
+    // line, which is why a correction lands on the characters it meant to.
+    outAttrs.inputType = InputType.TYPE_CLASS_TEXT
+    outAttrs.imeOptions = EditorInfo.IME_ACTION_DONE or
       EditorInfo.IME_FLAG_NO_FULLSCREEN or
       EditorInfo.IME_FLAG_NO_EXTRACT_UI
+    // The field starts empty, like the line the shell is about to echo.
+    outAttrs.initialSelStart = 0
+    outAttrs.initialSelEnd = 0
     return TerminalInputConnection()
   }
 
@@ -1341,9 +1368,13 @@ internal class GhosttyTerminalView(context: Context) : View(context) {
     ) ?: return false
     if (bytes.isEmpty()) return false
     sendBytes(bytes)
+    // A key can move the pane's cursor, complete a word or end a line: this
+    // client cannot follow it, so it stops claiming to know the line.
+    imeLine.invalidate()
     return true
   }
 
+  /** The preedit drawing takes no text while composing is sent and echoed. */
   private fun setPreedit(text: String) {
     if (text == preedit) return
     preedit = text
@@ -1351,44 +1382,109 @@ internal class GhosttyTerminalView(context: Context) : View(context) {
   }
 
   private inner class TerminalInputConnection :
-    BaseInputConnection(this@GhosttyTerminalView, false) {
-    override fun commitText(text: CharSequence, newCursorPosition: Int): Boolean {
-      setPreedit("")
-      sendText(text)
-      return super.commitText("", newCursorPosition)
+    InputConnectionWrapper(BaseInputConnection(this@GhosttyTerminalView, false), true) {
+    override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
+      imeLine.commit(text?.toString() ?: return true)
+      return true
     }
 
-    // Composing (CJK): shown at the cursor, sent once committed. Nothing goes
-    // to the program meanwhile, so it never sees half a word.
-    override fun setComposingText(text: CharSequence, newCursorPosition: Int): Boolean {
-      setPreedit(text.toString())
+    // The three-argument variants are separate methods on the wrapper: a board
+    // that styles its text calls these and would otherwise type into nothing.
+    override fun commitText(text: CharSequence, newCursorPosition: Int, textAttribute: TextAttribute?): Boolean {
+      imeLine.commit(text.toString())
+      return true
+    }
+
+    override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean {
+      imeLine.compose(text?.toString() ?: return true)
+      return true
+    }
+
+    override fun setComposingText(text: CharSequence, newCursorPosition: Int, textAttribute: TextAttribute?): Boolean {
+      imeLine.compose(text.toString())
+      return true
+    }
+
+    override fun setComposingRegion(start: Int, end: Int): Boolean {
+      imeLine.setComposingRegion(start, end)
+      return true
+    }
+
+    override fun setComposingRegion(start: Int, end: Int, textAttribute: TextAttribute?): Boolean {
+      imeLine.setComposingRegion(start, end)
       return true
     }
 
     override fun finishComposingText(): Boolean {
-      val text = preedit
-      setPreedit("")
-      if (text.isNotEmpty()) sendText(text)
+      imeLine.finishComposing()
       return true
     }
 
     override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
-      repeat(beforeLength) { tap(KeyEvent.KEYCODE_DEL) }
+      imeLine.deleteSurrounding(beforeLength, afterLength)
       return true
     }
+
+    override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean {
+      imeLine.deleteSurroundingCodePoints(beforeLength, afterLength)
+      return true
+    }
+
+    override fun replaceText(
+      start: Int,
+      end: Int,
+      text: CharSequence,
+      newCursorPosition: Int,
+      textAttribute: TextAttribute?
+    ): Boolean {
+      imeLine.replaceText(start, end, text.toString())
+      return true
+    }
+
+    override fun setSelection(start: Int, end: Int): Boolean {
+      imeLine.setSelection(start, end)
+      return true
+    }
+
+    override fun getTextBeforeCursor(length: Int, flags: Int): CharSequence =
+      imeLine.textBefore(length)
+
+    override fun getTextAfterCursor(length: Int, flags: Int): CharSequence =
+      imeLine.textAfter(length)
+
+    override fun getSelectedText(flags: Int): CharSequence = imeLine.selectedText()
 
     override fun performEditorAction(actionCode: Int): Boolean {
-      tap(KeyEvent.KEYCODE_ENTER)
+      imeLine.enter()
       return true
     }
 
-    private fun tap(keyCode: Int) {
-      sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
-      sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
-    }
+    override fun beginBatchEdit(): Boolean = true
 
-    override fun sendKeyEvent(event: KeyEvent): Boolean =
-      handleKeyEvent(event) || super.sendKeyEvent(event)
+    override fun endBatchEdit(): Boolean = true
+
+    // A key event takes the same path as a hardware key, which invalidates the
+    // line (nothing is sent to correct a cursor this client cannot follow) —
+    // except the keys a line editor owns, which the line sends itself.
+    override fun sendKeyEvent(event: KeyEvent): Boolean {
+      if (event.action == KeyEvent.ACTION_DOWN) {
+        when (event.keyCode) {
+          KeyEvent.KEYCODE_DEL -> {
+            imeLine.deleteSurrounding(1, 0)
+            return true
+          }
+          KeyEvent.KEYCODE_FORWARD_DEL -> {
+            imeLine.deleteSurrounding(0, 1)
+            return true
+          }
+          KeyEvent.KEYCODE_ENTER -> {
+            imeLine.enter()
+            return true
+          }
+        }
+      }
+      return handleKeyEvent(event) || super.sendKeyEvent(event)
+    }
   }
 
   private companion object {
