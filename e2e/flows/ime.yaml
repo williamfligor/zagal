@@ -1,0 +1,43 @@
+# The soft keyboard's own path to the pane, which no other flow reaches: with
+# suggestions enabled the IME owns a line and edits it with setComposingText,
+# commitText and deleteSurroundingText, and the app sends the difference against
+# what the pane already holds (see terminal/src/.../ImeLine.kt).
+#
+# Keys are tapped by Gboard's own layout ids (D = the q..p row, C = a..l,
+# B = z..m), so this assumes Gboard with its QWERTY layout, in English. What it
+# proves, on the host's side (e2e/run.sh), is that composing echoes as it is
+# typed and that a DEL erases one character of the line the shell already has.
+appId: io.github.osc100.zagal.e2e
+name: ime
+---
+- launchApp
+- tapOn: Spaces
+- tapOn:
+    id: space-row
+    index: 0
+- tapOn:
+    id: tab
+    index: 0
+- tapOn:
+    point: 60%,40%
+- waitForAnimationToEnd:
+    timeout: 3000
+# "zagalime", one key at a time: every one of these is composed, and sent.
+- tapOn: { id: "com.google.android.inputmethod.latin:id/B01" }  # z
+- tapOn: { id: "com.google.android.inputmethod.latin:id/C01" }  # a
+- tapOn: { id: "com.google.android.inputmethod.latin:id/C05" }  # g
+- tapOn: { id: "com.google.android.inputmethod.latin:id/C01" }  # a
+- tapOn: { id: "com.google.android.inputmethod.latin:id/C09" }  # l
+- tapOn: { id: "com.google.android.inputmethod.latin:id/D08" }  # i
+- tapOn: { id: "com.google.android.inputmethod.latin:id/B06" }  # m
+- tapOn: { id: "com.google.android.inputmethod.latin:id/D03" }  # e
+# Two DELs: deleteSurroundingText(1, 0) each, so one character leaves the pane.
+- tapOn: { id: "com.google.android.inputmethod.latin:id/key_pos_del" }
+- tapOn: { id: "com.google.android.inputmethod.latin:id/key_pos_del" }
+- waitForAnimationToEnd:
+    timeout: 1500
+- takeScreenshot: ime
+# Leave the app where the scenarios after the flows expect to find it: on
+# Spaces, with a New space button and no keyboard over it.
+- hideKeyboard
+- tapOn: Spaces

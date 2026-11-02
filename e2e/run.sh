@@ -142,7 +142,8 @@ else
     grep -oE '"address":"[^"]+"' | cut -d'"' -f4)
   core label "$agent" $(core get "$typed" | grep -oE '"herdr\.(space|tab)":"[^"]+"' | tr -d '"' | tr : =) >/dev/null
 
-  flows e2e/flows/tabs.yaml e2e/flows/spaces.yaml e2e/flows/pin.yaml e2e/flows/worktree.yaml
+  flows e2e/flows/tabs.yaml e2e/flows/spaces.yaml e2e/flows/pin.yaml e2e/flows/worktree.yaml \
+    e2e/flows/ime.yaml
 
   # The worktree flow made a checkout and removed it: git agrees.
   if [[ $(on_host git -C repo worktree list | wc -l) -ne 1 ]]; then
@@ -151,6 +152,23 @@ else
     exit 1
   fi
   echo "e2e: the worktree came and went"
+
+  # What the soft keyboard typed and then erased (flows/ime.yaml): "zagalime",
+  # one key at a time, then two DELs. On the host's side: the six characters,
+  # and not the eight.
+  keyboard=
+  for t in $(core ls | grep -oE '"address":"[^"]+"' | cut -d'"' -f4); do
+    if core read "$t" | grep -q "zagalime"; then
+      echo "e2e: the keyboard's DELs are missing on $t" >&2
+      exit 1
+    fi
+    if core read "$t" | grep -q "zagali"; then keyboard=$t; fi
+  done
+  if [[ -z $keyboard ]]; then
+    echo "e2e: no terminal on the throwaway core shows what the keyboard typed" >&2
+    exit 1
+  fi
+  echo "e2e: $keyboard shows the keyboard's line, minus the two DELs"
 
   scenarios e2e/scenarios/*.sh
 fi

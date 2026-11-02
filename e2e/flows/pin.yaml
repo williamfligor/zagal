@@ -4,6 +4,7 @@ appId: io.github.osc100.zagal.e2e
 name: pin
 ---
 - launchApp
+- tapOn: Agents
 - extendedWaitUntil:
     visible: Fake agent
     timeout: 20000

@@ -3,6 +3,7 @@ appId: io.github.osc100.zagal.e2e
 name: tabs
 ---
 - launchApp
+- tapOn: Spaces
 # The app opens on what needs you most (the fake agent): open the space first.
 - tapOn:
     id: space-row

@@ -5,6 +5,7 @@ appId: io.github.osc100.zagal.e2e
 name: worktree
 ---
 - launchApp
+- tapOn: Spaces
 # The space opens on its agent (it needs you most): its first tab is the shell.
 - tapOn:
     id: space-row
@@ -18,18 +19,30 @@ name: worktree
 - pressKey: Enter
 - waitForAnimationToEnd:
     timeout: 2000
-- pressKey: Back
+# Back is ESC to the terminal, and the keyboard covers the tab bar.
+- hideKeyboard
+- tapOn: Spaces
 - longPressOn:
     id: space-row
     index: 0
 - tapOn: New worktree
 - inputText: e2e-branch
 - tapOn: Create
+# Creating it opens the new space on its terminal; the rows are on Spaces.
+- hideKeyboard
+- tapOn: Spaces
 - extendedWaitUntil:
     visible: e2e-branch
     timeout: 30000
 - takeScreenshot: worktree
-- longPressOn: e2e-branch
+- longPressOn:
+    id: space-row
+    index: 1
+# The space's checkout is looked up as the menu opens, so the worktree
+# entries appear a moment after it does.
+- extendedWaitUntil:
+    visible: Remove worktree
+    timeout: 20000
 - tapOn: Remove worktree
 - tapOn: Remove
 - extendedWaitUntil:

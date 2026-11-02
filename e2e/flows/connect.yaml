@@ -17,6 +17,9 @@ env:
 - extendedWaitUntil:
     visible: connected
     timeout: 30000
+# The host list stays under Settings, and the keyboard covers the tabs.
+- hideKeyboard
+- tapOn: Spaces
 - tapOn: New space
 - tapOn: Terminal
 - extendedWaitUntil:

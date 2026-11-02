@@ -3,6 +3,7 @@ appId: io.github.osc100.zagal.e2e
 name: spaces
 ---
 - launchApp
+- tapOn: Spaces
 - longPressOn:
     id: space-row
     index: 0
@@ -16,6 +17,8 @@ name: spaces
     timeout: 10000
 - tapOn: New space
 - tapOn: Terminal
+# The new space opens on its terminal; the rows are back on the Spaces tab.
+- tapOn: Spaces
 - extendedWaitUntil:
     visible:
       id: space-row
